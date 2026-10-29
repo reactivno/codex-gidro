@@ -117,7 +117,6 @@ jobs:
         # шаблона не долетит до посетителя. Число страниц — из count индекса,
         # прогреваем ровно столько, сколько страниц в data/index.json.
         env:
-          SITE_URL: ${{ vars.SITE_URL }}
           WARMUP_TOKEN: ${{ secrets.WARMUP_TOKEN }}
         run: |
           set -e
@@ -144,7 +143,6 @@ jobs:
         # Без prune страница, убранная из CSV, живёт в cache/ вечно и отдаётся
         # Apache напрямую (200 вместо 404). Вызываем один раз после прогрева.
         env:
-          SITE_URL: ${{ vars.SITE_URL }}
           WARMUP_TOKEN: ${{ secrets.WARMUP_TOKEN }}
         run: |
           set -e
