@@ -78,6 +78,21 @@ jobs:
         # репозитория, а не в коде. Пустая переменная даёт адреса localhost.
         run: php scripts/split-data.php --site-url="$SITE_URL"
 
+      - name: Токен прогрева для хостинга
+        # Без токена прогрев и prune недоступны. PHP-FPM на хостинге может не
+        # видеть переменные окружения сайта, поэтому кладём токен dotfile'ом
+        # в корень: наружу его не отдаёт правило FilesMatch в .htaccess.
+        env:
+          WARMUP_TOKEN: ${{ secrets.WARMUP_TOKEN }}
+        run: |
+          if [ -z "$WARMUP_TOKEN" ]; then
+            echo "секрет WARMUP_TOKEN не задан"
+            exit 1
+          fi
+          # Перевод строки в секрете не должен попасть в файл и заголовок.
+          token=$(printf '%s' "$WARMUP_TOKEN" | tr -d '[:space:]')
+          printf '%s' "$token" > .warmup-token
+
       - name: Загрузка на хостинг
         uses: SamKirkland/FTP-Deploy-Action@v4.4.0
         with:
@@ -100,17 +115,6 @@ jobs:
             scripts/split-data.php
             scripts/build.php
             scripts/check.php
-
-      - name: Проверка WARMUP_TOKEN
-        # Без токена прогрев и prune недоступны: лучше упасть здесь, чем
-        # выложить сайт с кэшем, который не обновить.
-        env:
-          WARMUP_TOKEN: ${{ secrets.WARMUP_TOKEN }}
-        run: |
-          if [ -z "$WARMUP_TOKEN" ]; then
-            echo "секрет WARMUP_TOKEN не задан"
-            exit 1
-          fi
 
       - name: Прогрев кэша
         # Apache отдаёт готовый HTML из cache/ напрямую: без прогрева правка

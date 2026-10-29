@@ -38,6 +38,15 @@ if ($isCli) {
     // Токен — только в заголовке X-Warmup-Token. В query-строке токен оказался бы
     // в логах сервера (REQUEST_URI) и в истории браузера.
     $expected = env_value('WARMUP_TOKEN');
+    if ($expected === '') {
+        // PHP-FPM на хостинге может не получать переменные окружения сайта,
+        // поэтому деплой кладёт токен dotfile'ом в корень — .htaccess его
+        // наружу не отдаёт.
+        $file = ROOT_DIR . '/.warmup-token';
+        if (is_file($file)) {
+            $expected = trim((string) file_get_contents($file));
+        }
+    }
     $given = (string) ($_SERVER['HTTP_X_WARMUP_TOKEN'] ?? '');
     if ($expected === '' || !hash_equals($expected, $given)) {
         http_response_code(403);
