@@ -120,6 +120,9 @@ jobs:
           WARMUP_TOKEN: ${{ secrets.WARMUP_TOKEN }}
         run: |
           set -e
+          # Секрет мог приехать с хвостовым переводом строки: на хостинге
+          # env_value() срезает пробелы, тут их надо срезать самим.
+          token=$(printf '%s' "$WARMUP_TOKEN" | tr -d '[:space:]')
           index=data/index.json
           count=$(php -r '
             $d = json_decode(file_get_contents($argv[1]), true);
@@ -130,7 +133,7 @@ jobs:
             exit 1
           fi
           for ((from=0; from<count; from+=500)); do
-            answer=$(curl -fsS -H "X-Warmup-Token: ${WARMUP_TOKEN}" \
+            answer=$(curl -sS -H "X-Warmup-Token: ${token}" \
               "${SITE_URL}/scripts/warmup.php?from=${from}&limit=500")
             echo "$from: $answer"
             case "$answer" in
@@ -146,8 +149,19 @@ jobs:
           WARMUP_TOKEN: ${{ secrets.WARMUP_TOKEN }}
         run: |
           set -e
-          # curl -f + set -e: при 403 (нет/другой токен) и при 500 (пустой
-          # индекс) шаг падает сам, дополнительно ловить нечего.
-          answer=$(curl -fsS -H "X-Warmup-Token: ${WARMUP_TOKEN}" \
+          token=$(printf '%s' "$WARMUP_TOKEN" | tr -d '[:space:]')
+          # Без -f видно тело 403: «403 Forbidden» — это warmup.php (токен),
+          # голое «Forbidden» — запрет Apache из .htaccess.
+          answer=$(curl -sS -w '\nHTTP %{http_code}' \
+            -H "X-Warmup-Token: ${token}" \
             "${SITE_URL}/scripts/warmup.php?prune=1")
           echo "$answer"
+          case "$answer" in
+            *"HTTP 200"*) ;;
+            *"HTTP 403"*)
+              echo "403: WARMUP_TOKEN в окружении сайта не совпадает с секретом"
+              echo "репозитория или .htaccess закрыл scripts/warmup.php"
+              exit 1
+              ;;
+            *) exit 1 ;;
+          esac
