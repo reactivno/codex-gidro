@@ -1,0 +1,126 @@
+name: Deploy
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+# два быстрых мержа подряд не должны синхронизировать FTP параллельно
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Прод — главная ветка репозитория,
+    # как бы она ни называлась: main, master, develop.
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+
+      - name: Проверка синтаксиса PHP
+        run: |
+          find . -name '*.php' -not -path './.git/*' -print0 \
+            | xargs -0 -r -n1 php -l
+
+      - name: Проверка SITE_URL
+        # Пустой SITE_URL отправил бы на прод canonical и sitemap с localhost.
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: |
+          case "$SITE_URL" in
+            https://?*) ;;
+            *)
+              echo "переменная репозитория SITE_URL пуста или без https://"
+              exit 1
+              ;;
+          esac
+
+      - name: Данные страниц
+        # canonical и sitemap собираются с доменом сайта: он в переменной
+        # репозитория, а не в коде. Пустая переменная даёт адреса localhost.
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: php scripts/split-data.php --site-url="$SITE_URL"
+
+      - name: Загрузка на хостинг
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          server-dir: /
+          dangerous-clean-slate: false
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/.github/**
+            **/*.md
+            **/.env*
+            **/.pi-subagents/**
+            .ftp-deploy-sync-state.json
+            cache/**
+            _site/**
+            data/pages.csv
+            scripts/split-data.php
+            scripts/build.php
+            scripts/check.php
+
+      - name: Проверка WARMUP_TOKEN
+        # Без токена прогрев и prune недоступны: лучше упасть здесь, чем
+        # выложить сайт с кэшем, который не обновить.
+        env:
+          WARMUP_TOKEN: ${{ secrets.WARMUP_TOKEN }}
+        run: |
+          if [ -z "$WARMUP_TOKEN" ]; then
+            echo "секрет WARMUP_TOKEN не задан"
+            exit 1
+          fi
+
+      - name: Прогрев кэша
+        # Apache отдаёт готовый HTML из cache/ напрямую: без прогрева правка
+        # шаблона не долетит до посетителя. Число страниц — из count индекса,
+        # прогреваем ровно столько, сколько страниц в data/index.json.
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+          WARMUP_TOKEN: ${{ secrets.WARMUP_TOKEN }}
+        run: |
+          set -e
+          index=data/index.json
+          count=$(php -r '
+            $d = json_decode(file_get_contents($argv[1]), true);
+            echo (int)($d["count"] ?? 0);
+          ' "$index")
+          if [ "$count" -le 0 ]; then
+            echo "в индексе нет страниц: count=$count"
+            exit 1
+          fi
+          for ((from=0; from<count; from+=500)); do
+            answer=$(curl -fsS -H "X-Warmup-Token: ${WARMUP_TOKEN}" \
+              "${SITE_URL}/scripts/warmup.php?from=${from}&limit=500")
+            echo "$from: $answer"
+            case "$answer" in
+              *"ошибок: 0"*) ;;
+              *) echo "прогрев вернул ошибки"; exit 1 ;;
+            esac
+          done
+
+      - name: Очистка кэша (prune)
+        # Без prune страница, убранная из CSV, живёт в cache/ вечно и отдаётся
+        # Apache напрямую (200 вместо 404). Вызываем один раз после прогрева.
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+          WARMUP_TOKEN: ${{ secrets.WARMUP_TOKEN }}
+        run: |
+          set -e
+          # curl -f + set -e: при 403 (нет/другой токен) и при 500 (пустой
+          # индекс) шаг падает сам, дополнительно ловить нечего.
+          answer=$(curl -fsS -H "X-Warmup-Token: ${WARMUP_TOKEN}" \
+            "${SITE_URL}/scripts/warmup.php?prune=1")
+          echo "$answer"
