@@ -42,6 +42,10 @@ if ($isCli) {
     if ($expected === '' || !hash_equals($expected, $given)) {
         http_response_code(403);
         echo "403 Forbidden\n";
+        // Диагностика для деплоя без значений: видно, не задан токен на
+        // хостинге или не дошёл заголовок. Сами значения не печатаем.
+        echo 'токен на сервере: ' . ($expected === '' ? 'не задан' : 'длина ' . strlen($expected)) . "\n";
+        echo 'заголовок: ' . ($given === '' ? 'не дошёл' : 'длина ' . strlen($given)) . "\n";
         exit;
     }
 
